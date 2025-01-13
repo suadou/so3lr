@@ -2,26 +2,35 @@ import jax
 import jax.numpy as jnp
 
 from functools import partial
+from typing import Callable
 from jax_md import partition
 from jax_md.space import DisplacementOrMetricFn, Box
 
 from so3lr.graph import Graph
 
 
-def neighbor_list_featurizer(displacement_fn, species):
+def neighbor_list_featurizer(displacement_fn, default_species):
     def featurize(R, neighbor, neighbor_lr, **kwargs):
         idx_i = neighbor[0]  # shape: P
         idx_j = neighbor[1]  # shape: P
         idx_i_lr = neighbor_lr[0]  # shape: P
         idx_j_lr = neighbor_lr[1]  # shape: P
-
         Ra = R[idx_i]
         Rb = R[idx_j]
         Ra_lr = R[idx_i_lr]
         Rb_lr = R[idx_j_lr]
 
-        if 'box' in kwargs:
-            box = kwargs.get('box')
+        box = kwargs.get('box', None)
+        
+
+        node_mask = kwargs.get('node_mask', None)
+
+        graph_mask = kwargs.get('graph_mask', None)
+
+        batch_segments = kwargs.get('batch_segments', None)
+        
+        species = kwargs.get('species', default_species)
+        
 
         d = jax.vmap(partial(displacement_fn, **kwargs))
         dR = d(Ra, Rb)
@@ -33,19 +42,20 @@ def neighbor_list_featurizer(displacement_fn, species):
             edges=dR,
             centers=idx_i,
             others=idx_j,
-            mask=None,
             total_charge=jnp.array([0.]),
             num_unpaired_electrons=jnp.array([0.]),
             edges_lr=dR_lr,
             idx_i_lr=idx_i_lr,
             idx_j_lr=idx_j_lr,
-            cell=box  # will raise an error if box not in kwargs.
+            cell=box,  # will raise an error if box not in kwargs.
+            node_mask=node_mask,
+            batch_segments=batch_segments,
+            graph_mask=graph_mask,
         )
 
         return graph
 
     return featurize
-
 
 def to_jax_md(
         potential,  # the mlff potential
@@ -60,6 +70,7 @@ def to_jax_md(
         minimum_cell_size_multiplier_lr: float = 1.0,
         disable_cell_list: bool = False,
         fractional_coordinates: bool = True,
+        custom_mask_function: Callable = None,
         **neighbor_kwargs
 ):
     # create the neighbor_fn
@@ -74,6 +85,7 @@ def to_jax_md(
         fractional_coordinates=fractional_coordinates,
         format=partition.NeighborListFormat(1),  # only sparse is supported in mlff
         disable_cell_list=disable_cell_list,
+        custom_mask_function=custom_mask_function,
         **neighbor_kwargs)
 
     # create the neighbor_fn for long-range cutoff
@@ -88,6 +100,7 @@ def to_jax_md(
         fractional_coordinates=fractional_coordinates,
         format=partition.NeighborListFormat(2),  # long-range modules can handle OrderedSparse.
         disable_cell_list=disable_cell_list,
+        custom_mask_function=custom_mask_function,
         **neighbor_kwargs)
 
     featurizer = neighbor_list_featurizer(
